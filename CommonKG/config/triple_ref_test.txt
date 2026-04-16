@@ -1,0 +1,16 @@
+<Diabetes>	<has symptom>	<Polyuria>
+<Diabetes>	<diagnostic criteria>	<HbA1c≥6.5%>
+<Diabetes>	<common complication>	<Retinopathy>
+<Diabetes>	<first line treatment>	<Metformin>
+<Insulin>	<drug type>	<Long-acting analog>
+<Insulin>	<administration route>	<Subcutaneous>
+<Insulin>	<common side effect>	<Hypoglycemia>
+<Insulin>	<storage condition>	<2-8°C>
+<Blood Glucose>	<monitoring device>	<Glucometer>
+<Blood Glucose>	<normal range>	<3.9-6.1mmol/L>
+<Blood Glucose>	<elevated condition>	<Hyperglycemia>
+<Blood Glucose>	<regulating organ>	<Pancreas>
+<Metformin>	<mechanism>	<Inhibit gluconeogenesis>
+<Metformin>	<contraindication>	<Renal failure>
+<Metformin>	<drug interaction>	<Contrast media>
+<Metformin>	<adverse effect>	<Lactic acidosis>

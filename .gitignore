@@ -1,0 +1,14 @@
+__pycache__/database_utils.cpython-311.pyc
+*.pyc
+temp
+CommonKG/data
+*.sh
+visualize.py
+*.log
+ckg_data
+ttt
+
+datasets/
+data/
+
+ARCHITECTURE.md
