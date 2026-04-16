@@ -1,0 +1,90 @@
+sources:
+  - kg_id: kg_complaints_core
+    url: https://www.consumerfinance.gov/data-research/consumer-complaints/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: weekly
+
+  - kg_id: kg_complaints_core
+    url: https://cfpb.github.io/api/ccdb/api.html
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_complaints_core
+    url: https://cfpb.github.io/api/ccdb/fields.html
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_complaints_core
+    url: https://files.consumerfinance.gov/f/documents/cfpb_consumer_complaint_form_product_issue_options_August_2023_FINAL.pdf
+    doc_type: pdf
+    priority: high
+    refresh_frequency: quarterly
+
+  - kg_id: kg_complaints_core
+    url: https://files.consumerfinance.gov/f/documents/cfpb_narrative-scrubbing-standard_2023-05.pdf
+    doc_type: pdf
+    priority: medium
+    refresh_frequency: yearly
+
+  - kg_id: kg_credit_domain
+    url: https://www.consumerfinance.gov/rules-policy/regulations/1026/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_credit_domain
+    url: https://www.consumerfinance.gov/compliance/compliance-resources/other-applicable-requirements/fair-credit-reporting-act/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_credit_domain
+    url: https://www.consumerfinance.gov/compliance/supervision-examinations/fair-credit-reporting-act-fcra-examination-procedures/
+    doc_type: webpage
+    priority: medium
+    refresh_frequency: quarterly
+
+  - kg_id: kg_lending_domain
+    url: https://www.consumerfinance.gov/rules-policy/regulations/1024/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_lending_domain
+    url: https://www.consumerfinance.gov/compliance/compliance-resources/mortgage-resources/real-estate-settlement-procedures-act/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_banking_domain
+    url: https://www.consumerfinance.gov/rules-policy/regulations/1005/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_banking_domain
+    url: https://www.consumerfinance.gov/compliance/compliance-resources/deposit-accounts-resources/electronic-fund-transfers/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: monthly
+
+  - kg_id: kg_regulatory_policy
+    url: https://www.consumerfinance.gov/compliance/consumer-complaint-program/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: weekly
+
+  - kg_id: kg_regulatory_policy
+    url: https://www.consumerfinance.gov/compliance/consumer-complaint-program/company-process/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: weekly
+
+  - kg_id: kg_regulatory_policy
+    url: https://www.consumerfinance.gov/complaint/process/
+    doc_type: webpage
+    priority: high
+    refresh_frequency: weekly

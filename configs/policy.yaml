@@ -1,0 +1,7 @@
+policy:
+  uncertainty_threshold: 0.35
+  compliance_high_risk_threshold: 0.7
+  fairness_parity_limit: 0.1
+  max_parallel_agents: 3
+  max_secondary_kgs: 2
+  fail_closed_on_trace_errors: true

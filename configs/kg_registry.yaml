@@ -1,0 +1,35 @@
+kgs:
+  - kg_id: kg_complaints_core
+    working_dir: datasets/complaints_core
+    chunks_file: datasets/complaints_core/complaints_core_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
+
+  - kg_id: kg_credit_domain
+    working_dir: datasets/credit_domain
+    chunks_file: datasets/credit_domain/credit_domain_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
+
+  - kg_id: kg_lending_domain
+    working_dir: datasets/lending_domain
+    chunks_file: datasets/lending_domain/lending_domain_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
+
+  - kg_id: kg_banking_domain
+    working_dir: datasets/banking_domain
+    chunks_file: datasets/banking_domain/banking_domain_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
+
+  - kg_id: kg_regulatory_policy
+    working_dir: datasets/regulatory_policy
+    chunks_file: datasets/regulatory_policy/regulatory_policy_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
