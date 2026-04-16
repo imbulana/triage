@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BridgeEdge",
+  "type": "object",
+  "required": [
+    "from_kg",
+    "from_node",
+    "to_kg",
+    "to_node",
+    "bridge_type",
+    "confidence",
+    "provenance",
+    "last_validated_at"
+  ],
+  "properties": {
+    "from_kg": {"type": "string"},
+    "from_node": {"type": "string"},
+    "to_kg": {"type": "string"},
+    "to_node": {"type": "string"},
+    "bridge_type": {
+      "type": "string",
+      "enum": [
+        "maps_to_issue",
+        "cites_policy",
+        "handled_by_team",
+        "requires_sla",
+        "similar_pattern",
+        "depends_on"
+      ]
+    },
+    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "provenance": {
+      "type": "object",
+      "required": ["method"],
+      "properties": {
+        "method": {"type": "string"},
+        "sources": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "last_validated_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}
