@@ -13,4 +13,4 @@ conda activate triage
 
 ## References
 
-[https://github.com/KnowledgeXLab/LeanRAG](LeanRAG)
+[LeanRAG](https://github.com/KnowledgeXLab/LeanRAG)
