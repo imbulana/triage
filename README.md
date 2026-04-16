@@ -1,4 +1,4 @@
-# Multi-Agent Reasoning on Bridged Knowledge Graphs for Complaint Triage
+Multi-Agent Reasoning on Bridged Knowledge Graphs for Complaint Triage
 
 ## Setup
 
@@ -10,3 +10,7 @@ conda activate triage
 ```
 
 ## Usage
+
+## References
+
+[https://github.com/KnowledgeXLab/LeanRAG](LeanRAG)
