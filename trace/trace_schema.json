@@ -11,7 +11,17 @@
     "escalation_reason"
   ],
   "properties": {
-    "agent_evidence": {"type": "array"},
+    "agent_evidence": {
+      "type": "object",
+      "required": ["domain", "compliance", "routing", "resolution"],
+      "properties": {
+        "domain": {"type": "array"},
+        "compliance": {"type": "array"},
+        "routing": {"type": "array"},
+        "resolution": {"type": "array"}
+      },
+      "additionalProperties": true
+    },
     "bridge_hops": {"type": "array"},
     "policy_checks": {"type": "array", "items": {"type": "string"}},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
