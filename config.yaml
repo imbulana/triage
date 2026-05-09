@@ -1,21 +1,23 @@
 
-glm:
-  model: "bge_m3"
-  base_url: "http://10.140.37.43:8000/v1"
-  embedding_model: "bge_m3"
-
-deepseek:
-
-  # model: "Qwen3-14b"
-  model: "qwen2.5"
-  # model: "Qwen3-32b"
-
+llm:
+  # Local Ollama OpenAI-compatible endpoint. These model names match `ollama list`.
+  base_url: "http://localhost:11434/v1"
   api_key: "ollama"
-  base_url: "http://localhost:8001/v1"
+  extraction_model: "gemma4:e2b"
+  commonkg_model: "gemma4:e2b"
+  chat_model: "gemma4:e2b"
+  evaluation_model: "deepseek-v3-250324"
+  embedding_base_url: "http://localhost:11434/v1"
+  embedding_api_key: "ollama"
+  embedding_model: "embeddinggemma"
+
+openai:
+  # Backward-compatible aliases used by older modules.
+  chat_model: "gemma4:e2b"
+  embedding_model: "embeddinggemma"
+  base_url: "http://localhost:11434/v1"
 
 # Model Parameters
 model_params:
-  openai_embedding_dim: 1536
-  glm_embedding_dim: 1024
+  openai_embedding_dim: 768
   max_token_size: 8192
-
