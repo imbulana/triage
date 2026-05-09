@@ -1,17 +1,25 @@
 import argparse
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import Dict
 
 import yaml
+from dotenv import load_dotenv
+from tqdm import tqdm
 
-from bridges.build_bridges import build_candidate_bridges
+from bridges.build_bridges import build_bridge_sets
 from bridges.bridge_store import BridgeStore
-from ingestion.fetch_sources import fetch_and_store
+from ingestion.fetch_sources import fetch_and_store, import_local_xml
+from ingestion.extract_triples import extract_triples_for_kg
 from ingestion.prepare_chunks import prepare_kg_chunks
+from ingestion.simple_kg import bootstrap_kg_from_chunks
 from orchestrator import ComplaintOrchestrator
 from query_service import QueryService
+
+load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 def _load_registry(path: str = "configs/kg_registry.yaml") -> Dict:
@@ -19,15 +27,23 @@ def _load_registry(path: str = "configs/kg_registry.yaml") -> Dict:
 
 
 def cmd_ingest(args) -> None:
-    total = fetch_and_store(args.manifest, args.raw_out)
-    print(f"Fetched {total} source documents")
+    if args.verbose_logging:
+        logger.info("Starting ingest with registry=%s raw_out=%s", args.registry, args.raw_out)
+    if args.xml_root:
+        total = import_local_xml(args.xml_root, args.raw_out, verbose_logging=args.verbose_logging)
+        print(f"Imported {total} local XML documents")
+    else:
+        total = fetch_and_store(args.manifest, args.raw_out, verbose_logging=args.verbose_logging)
+        print(f"Fetched {total} source documents")
 
     registry = _load_registry(args.registry)
     chunked = 0
     for kg in registry.get("kgs", []):
         if not kg.get("enabled", True):
             continue
-        count = prepare_kg_chunks(args.raw_out, kg["kg_id"], kg["chunks_file"])
+        if args.verbose_logging:
+            logger.info("Preparing chunks for kg=%s", kg["kg_id"])
+        count = prepare_kg_chunks(args.raw_out, kg["kg_id"], kg["chunks_file"], verbose_logging=args.verbose_logging)
         print(f"{kg['kg_id']}: {count} chunks")
         chunked += count
     print(f"Prepared total chunks: {chunked}")
@@ -39,10 +55,55 @@ def cmd_build_kgs(args) -> None:
         if not kg.get("enabled", True):
             continue
         working_dir = kg["working_dir"]
+        if args.verbose_logging:
+            logger.info("Starting build for kg=%s working_dir=%s", kg["kg_id"], working_dir)
         Path(working_dir).mkdir(parents=True, exist_ok=True)
-        print(f"[build-kgs] Build KG in {working_dir} using existing LeanRAG extraction + build scripts.")
+        entity_path = Path(working_dir) / "entity.jsonl"
+        relation_path = Path(working_dir) / "relation.jsonl"
+        if args.bootstrap or not (entity_path.exists() and relation_path.exists()):
+            stats = bootstrap_kg_from_chunks(
+                kg["chunks_file"],
+                working_dir,
+                kg["kg_id"],
+                verbose_logging=args.verbose_logging,
+            )
+            print(
+                f"[build-kgs] {kg['kg_id']}: bootstrapped {stats['entities']} entities "
+                f"and {stats['relations']} relations from {stats['chunks']} chunks."
+            )
+        else:
+            print(f"[build-kgs] {kg['kg_id']}: using existing extracted entity.jsonl/relation.jsonl.")
         if args.run_commands:
-            subprocess.run(["python", "build_graph.py", "-p", working_dir], check=False)
+            print(f"[build-kgs] Running LeanRAG clustering/index build in {working_dir}.")
+            cmd = ["python", "build_graph.py", "-p", working_dir]
+            if args.verbose_logging:
+                cmd.append("--verbose-logging")
+            subprocess.run(cmd, check=True)
+
+
+def cmd_extract_triples(args) -> None:
+    registry = _load_registry(args.registry)
+    selected_kgs = [
+        kg
+        for kg in registry.get("kgs", [])
+        if kg.get("enabled", True) and (not args.kg_id or kg["kg_id"] == args.kg_id)
+    ]
+    for kg in tqdm(selected_kgs, desc="extract KGs", unit="kg", disable=args.no_progress):
+        print(f"[extract-triples] {kg['kg_id']}: extracting from {kg['chunks_file']}")
+        stats = extract_triples_for_kg(
+            kg["chunks_file"],
+            kg["working_dir"],
+            model=args.model,
+            base_url=args.base_url,
+            max_concurrency=args.max_concurrency,
+            limit=args.limit,
+            show_progress=not args.no_progress,
+            verbose_logging=args.verbose_logging,
+        )
+        print(
+            f"[extract-triples] {kg['kg_id']}: extracted {stats['entities']} entities "
+            f"and {stats['relations']} relations from {stats['chunks']} chunks."
+        )
 
 
 def cmd_build_bridges(args) -> None:
@@ -52,10 +113,30 @@ def cmd_build_bridges(args) -> None:
         if kg.get("enabled", True):
             kg_to_entity[kg["kg_id"]] = str(Path(kg["working_dir"]) / "entity.jsonl")
 
-    edges = build_candidate_bridges({k: Path(v) for k, v in kg_to_entity.items()})
+    if args.verbose_logging:
+        logger.info("Starting bridge build for %s KGs", len(kg_to_entity))
+    result = build_bridge_sets(
+        {k: Path(v) for k, v in kg_to_entity.items()},
+        accept_threshold=args.min_confidence,
+        review_threshold=args.review_threshold,
+        semantic=args.semantic,
+        semantic_threshold=args.semantic_threshold,
+        max_semantic_edges_per_entity=args.max_semantic_edges_per_entity,
+        verbose_logging=args.verbose_logging,
+    )
     store = BridgeStore(args.output)
-    store.add_many(edges)
+    if args.replace:
+        store.save(result.accepted)
+    else:
+        store.add_many(result.accepted)
+    review_output = (
+        Path(args.review_output)
+        if args.review_output
+        else Path(args.output).with_name(f"{Path(args.output).stem}_review.json")
+    )
+    BridgeStore(str(review_output)).save(result.review)
     print(f"Stored {len(store.load())} bridge edges")
+    print(f"Stored {len(result.review)} review bridge candidates in {review_output}")
 
 
 def cmd_query(args) -> None:
@@ -83,16 +164,39 @@ def main() -> None:
     p_ingest.add_argument("--manifest", default="configs/sources_manifest.yaml")
     p_ingest.add_argument("--registry", default="configs/kg_registry.yaml")
     p_ingest.add_argument("--raw-out", default="datasets/raw_sources")
+    p_ingest.add_argument("--xml-root", default=None, help="Optional local XML root: <xml-root>/<kg_id>/*.xml")
+    p_ingest.add_argument("--verbose-logging", action="store_true", help="Print timestamped ingest logs")
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_build = sub.add_parser("build-kgs")
     p_build.add_argument("--registry", default="configs/kg_registry.yaml")
+    p_build.add_argument("--bootstrap", action="store_true", help="Force deterministic bootstrap before indexing")
     p_build.add_argument("--run-commands", action="store_true")
+    p_build.add_argument("--verbose-logging", action="store_true", help="Print timestamped build logs")
     p_build.set_defaults(func=cmd_build_kgs)
+
+    p_extract = sub.add_parser("extract-triples")
+    p_extract.add_argument("--registry", default="configs/kg_registry.yaml")
+    p_extract.add_argument("--kg-id", default=None, help="Optional single KG to extract")
+    p_extract.add_argument("--model", default=None, help="Override chat model")
+    p_extract.add_argument("--base-url", default=None, help="Override OpenAI-compatible base URL")
+    p_extract.add_argument("--max-concurrency", type=int, default=4)
+    p_extract.add_argument("--limit", type=int, default=None, help="Limit chunks for smoke tests")
+    p_extract.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars")
+    p_extract.add_argument("--verbose-logging", action="store_true", help="Print timestamped extraction logs")
+    p_extract.set_defaults(func=cmd_extract_triples)
 
     p_bridges = sub.add_parser("build-bridges")
     p_bridges.add_argument("--registry", default="configs/kg_registry.yaml")
     p_bridges.add_argument("--output", default="bridges/bridge_edges.json")
+    p_bridges.add_argument("--review-output", default=None)
+    p_bridges.add_argument("--min-confidence", type=float, default=0.78)
+    p_bridges.add_argument("--review-threshold", type=float, default=0.58)
+    p_bridges.add_argument("--semantic", action="store_true", help="Use embedding similarity for semantic bridges")
+    p_bridges.add_argument("--semantic-threshold", type=float, default=0.86)
+    p_bridges.add_argument("--max-semantic-edges-per-entity", type=int, default=3)
+    p_bridges.add_argument("--replace", action="store_true", help="Replace output instead of appending to it")
+    p_bridges.add_argument("--verbose-logging", action="store_true", help="Print timestamped bridge logs")
     p_bridges.set_defaults(func=cmd_build_bridges)
 
     p_query = sub.add_parser("query")
@@ -110,6 +214,11 @@ def main() -> None:
     p_orc.set_defaults(func=cmd_orchestrate)
 
     args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.INFO if getattr(args, "verbose_logging", False) else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     args.func(args)
 
 

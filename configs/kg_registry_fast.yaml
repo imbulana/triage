@@ -1,0 +1,21 @@
+kgs:
+  - kg_id: kg_complaints_core
+    working_dir: datasets_fast/complaints_core
+    chunks_file: datasets_fast/complaints_core/complaints_core_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
+
+  - kg_id: kg_banking_domain
+    working_dir: datasets_fast/banking_domain
+    chunks_file: datasets_fast/banking_domain/banking_domain_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
+
+  - kg_id: kg_regulatory_policy
+    working_dir: datasets_fast/regulatory_policy
+    chunks_file: datasets_fast/regulatory_policy/regulatory_policy_chunk.json
+    topk: 10
+    level_mode: 1
+    enabled: true
