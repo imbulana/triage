@@ -11,6 +11,7 @@ import tiktoken
 import umap
 import copy
 import asyncio
+import yaml
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
 from sklearn.mixture import GaussianMixture
@@ -24,6 +25,7 @@ from tools.utils import write_jsonl, write_jsonl_force
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
 logger= logging.getLogger("cluster")
 ENCODER = None
+EMBEDDING_DIM = yaml.safe_load(open("config.yaml", encoding="utf-8")).get("model_params", {}).get("openai_embedding_dim", 1024)
 
 def check_test(entities):
     e_l=[]
@@ -155,6 +157,62 @@ def convert_response_to_json(response: str) -> dict:
         logger.info("JSON data successfully extracted.")
     
     return prediction_json
+
+
+def normalize_cluster_report(data: dict, fallback_name: str = "Unnamed Community") -> dict:
+    data = dict(data or {})
+    entity_name = (
+        data.get("entity_name")
+        or data.get("name")
+        or data.get("title")
+        or fallback_name
+    )
+    entity_description = (
+        data.get("entity_description")
+        or data.get("description")
+        or data.get("summary")
+        or ""
+    )
+    findings = data.get("findings")
+    if findings is None:
+        findings = data.get("details") or data.get("evidence") or []
+    if isinstance(findings, str):
+        findings = [{"summary": findings[:120], "explanation": findings}]
+    elif not isinstance(findings, list):
+        findings = []
+
+    normalized_findings = []
+    for item in findings:
+        if isinstance(item, dict):
+            summary = str(item.get("summary") or item.get("title") or item.get("label") or "").strip()
+            explanation = str(
+                item.get("explanation") or item.get("description") or item.get("detail") or summary
+            ).strip()
+            if summary or explanation:
+                normalized_findings.append(
+                    {
+                        "summary": summary or explanation[:120],
+                        "explanation": explanation or summary,
+                    }
+                )
+        elif isinstance(item, str) and item.strip():
+            normalized_findings.append(
+                {"summary": item.strip()[:120], "explanation": item.strip()}
+            )
+
+    if not entity_description:
+        if normalized_findings:
+            entity_description = " ".join(
+                finding["explanation"] for finding in normalized_findings[:3]
+            )[:2000]
+        else:
+            entity_description = f"Aggregate community centered on {entity_name}."
+
+    data["entity_name"] = str(entity_name).strip() or fallback_name
+    data["entity_description"] = str(entity_description).strip()
+    data["findings"] = normalized_findings
+    logger.info("Normalized cluster report keys: %s", sorted(data.keys()))
+    return data
 def encode_string_by_tiktoken(content: str, model_name: str = "gpt-4o"):
     global ENCODER
     if ENCODER is None:
@@ -425,7 +483,10 @@ def process_cluster(
     describe=_pack_single_community_describe(cluster_nodes,cluster_intern_relation)
     hint_prompt=community_report_prompt.format(input_text=describe)
     response = use_llm_func(hint_prompt)
-    data = convert_response_to_json(response)
+    data = normalize_cluster_report(
+        convert_response_to_json(response),
+        fallback_name=f"Community Label {int(label)}",
+    )
     data['level'] = layer
     data['children'] = [n['entity_name'] for n in cluster_nodes]
     data['source_id'] = "|".join(set([n['source_id'] for n in cluster_nodes]))
@@ -473,7 +534,13 @@ def process_relation(
     # allowed_tokens=100000
     # allowed_tokens=1
     if tokens>allowed_tokens:
-        print(f"{tokens}大于{allowed_tokens}，进行llm生成\n{maybe_edge[0]}和{maybe_edge[1]} in processing")
+        logging.info(
+            "Relation context tokens=%s exceed allowed_tokens=%s; generating LLM summary for %s <-> %s",
+            tokens,
+            allowed_tokens,
+            maybe_edge[0],
+            maybe_edge[1],
+        )
         exact_prompt=cluster_cluster_relation_prompt.format(entity_a=maybe_edge[0],entity_b=maybe_edge[1],\
             entity_a_description=cluster1_description,entity_b_description=cluster2_description,\
                 relation_information="\n".join(relation_infromation),tokens=gene_tokens)
@@ -487,7 +554,11 @@ def process_relation(
                             'level':layer+1
                         }
     else:
-        print(f"{tokens}小于{allowed_tokens}，不进行llm生成")
+        logging.info(
+            "Relation context tokens=%s within allowed_tokens=%s; using direct relation text",
+            tokens,
+            allowed_tokens,
+        )
         temp_relations[maybe_edge]={
                             'src_tgt':maybe_edge[0],
                             'tgt_src':maybe_edge[1],
@@ -531,7 +602,7 @@ class Hierarchical_Clustering(ClusteringAlgorithm):
             logging.info(f"############ Layer[{layer}] Clustering ############")
             # Perform the clustering
             if  len(nodes) <= 2:
-                print("当前簇数小于2，停止聚类")
+                logging.info("Stopping clustering: node count is <= 2")
                 break
             clusters = perform_clustering(
                 embeddings, dim=reduction_dimension, threshold=cluster_threshold,cluster_size=cluster_size
@@ -554,7 +625,7 @@ class Hierarchical_Clustering(ClusteringAlgorithm):
             #     break
             # summarize
             if len(unique_clusters) <=4:
-                print(f"当前簇数小于5，停止聚类")
+                logging.info("Stopping clustering: cluster count is <= 4")
                 break
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
@@ -610,11 +681,11 @@ class Hierarchical_Clustering(ClusteringAlgorithm):
                     seen.add(entity_name)
                     unique_nodes.append(item)
             nodes = unique_nodes
-            for index,i in enumerate(unique_nodes): #再进行embedding时发现，有个元素的vector不是np而是list
+            for index,i in enumerate(unique_nodes):
                 vec=i["vector"]
-                if type(vec)==list  or vec.shape!=(1,1024):
-                    print(index)
-                    unique_nodes[index]["vector"]=np.array(vec).reshape((1,1024))
+                if type(vec)==list  or vec.shape!=(1,EMBEDDING_DIM):
+                    logging.info("Normalizing vector shape for node index=%s to embedding_dim=%s", index, EMBEDDING_DIM)
+                    unique_nodes[index]["vector"]=np.array(vec).reshape((1,EMBEDDING_DIM))
             
             embeddings = np.array([x["vector"] for x in unique_nodes]).squeeze() #为下一轮迭代做准备
             all_nodes.append(nodes) 
@@ -644,7 +715,10 @@ class Hierarchical_Clustering(ClusteringAlgorithm):
             hint_prompt=community_report_prompt.format(input_text=describe)
             # response = use_llm_func(hint_prompt,**llm_extra_kwargs)
             response = use_llm_func(hint_prompt)
-            data = convert_response_to_json(response)
+            data = normalize_cluster_report(
+                convert_response_to_json(response),
+                fallback_name=f"Top Community Layer {layer}",
+            )
             data['level']=layer
             data['children']=[i['entity_name'] for i in cluster_nodes]
             data['source_id']= "|".join(set([i['source_id'] for i in cluster_nodes]))

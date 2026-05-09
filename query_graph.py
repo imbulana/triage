@@ -5,35 +5,35 @@ import os
 import time
 import logging
 import numpy as np
-from openai import OpenAI
 import pymysql
 import tiktoken
 from tqdm import tqdm
 import yaml
-from tools.utils import InstanceManager
+from dotenv import load_dotenv
 from openai import  OpenAI
 from database_utils import build_vector_search,search_vector_search,find_tree_root,\
     search_nodes_link,search_nodes,search_community,search_chunks,get_text_units,find_path
+from llm_settings import load_llm_settings
 from prompt import GRAPH_FIELD_SEP, PROMPTS
 from itertools import combinations
 
 logger=logging.getLogger(__name__)
+load_dotenv()
 with open('config.yaml', 'r') as file:
     config = yaml.safe_load(file)
-MODEL = config['deepseek']['model']
-DEEPSEEK_API_KEY = config['deepseek']['api_key']
-DEEPSEEK_URL = config['deepseek']['base_url']
-EMBEDDING_MODEL = config['glm']['model']
-EMBEDDING_URL = config['glm']['base_url']
+LLM_SETTINGS = load_llm_settings()
+OPENAI_API_KEY = LLM_SETTINGS["api_key"]
+OPENAI_BASE_URL = LLM_SETTINGS["base_url"]
+OPENAI_EMBEDDING_MODEL = LLM_SETTINGS["embedding_model"]
 TOTAL_TOKEN_COST = 0
 TOTAL_API_CALL_COST = 0
 
 def embedding(texts: list[str]) -> np.ndarray:
-    model_name = EMBEDDING_MODEL
-    client = OpenAI(
-        api_key=EMBEDDING_MODEL,
-        base_url=EMBEDDING_URL
-    ) 
+    model_name = OPENAI_EMBEDDING_MODEL
+    client_kwargs = {"api_key": LLM_SETTINGS["embedding_api_key"]}
+    if LLM_SETTINGS["embedding_base_url"]:
+        client_kwargs["base_url"] = LLM_SETTINGS["embedding_base_url"]
+    client = OpenAI(**client_kwargs)
     embedding = client.embeddings.create(
         input=texts,
         model=model_name,
@@ -161,8 +161,9 @@ def query_graph(global_config,db,query):
     print(f"response time: {g-e:.2f}s")
     return describe,response
 if __name__=="__main__":
-    db = pymysql.connect(host='localhost', user='root',port=4321,
-                      passwd='123',  charset='utf8mb4')
+    from database_utils import _mysql_connection
+
+    db = _mysql_connection()
     global_config={}
     WORKING_DIR = f"/data/zyz/trag_ds/exp/lean_full_cs10_top10_chunk5/mix"
     global_config['chunks_file']="/data/zyz/trag_ds/hi_ex/mix/kv_store_text_chunks.json"
@@ -170,16 +171,23 @@ if __name__=="__main__":
     global_config['working_dir']=WORKING_DIR
     global_config['topk']=10
     global_config['level_mode']=1
-    num=4
-    instanceManager=InstanceManager(
-        url="http://xxx",
-        ports=[8001 for i in range(num)],
-        gpus=[i for i in range(num)],
-        generate_model="qwen3_32b",
-        startup_delay=30
-    )
-    
-    global_config['use_llm_func']=instanceManager.generate_text
+    chat_model = LLM_SETTINGS["chat_model"]
+    chat_client_kwargs = {"api_key": OPENAI_API_KEY}
+    if OPENAI_BASE_URL:
+        chat_client_kwargs["base_url"] = OPENAI_BASE_URL
+    chat_client = OpenAI(**chat_client_kwargs)
+
+    def _openai_generate_text(prompt, system_prompt=None, history_messages=None, **kwargs):
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        if history_messages:
+            messages.extend(history_messages)
+        messages.append({"role": "user", "content": prompt})
+        response = chat_client.chat.completions.create(model=chat_model, messages=messages, **kwargs)
+        return response.choices[0].message.content or ""
+
+    global_config['use_llm_func']=_openai_generate_text
     query="What is the maturity date of the credit agreement?"
     topk=10
     ref,response=query_graph(global_config,db,query)

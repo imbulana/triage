@@ -3,11 +3,28 @@ import os
 import numpy as np
 from pymilvus  import MilvusClient
 import pymysql
+import yaml
 from collections import Counter
+
+
+def _mysql_connection(database=None):
+    kwargs = {
+        "host": os.getenv("MYSQL_HOST", "localhost"),
+        "port": int(os.getenv("MYSQL_PORT", "4321")),
+        "user": os.getenv("MYSQL_USER", "root"),
+        "passwd": os.getenv("MYSQL_PASSWORD", "123"),
+        "charset": "utf8mb4",
+    }
+    if database:
+        kwargs["database"] = database
+    return pymysql.connect(**kwargs)
+
+
 def build_vector_search(data,working_dir):
    
     milvus_client = MilvusClient(uri=f"{working_dir}/milvus_demo.db")
     index_params = milvus_client.prepare_index_params()
+    embedding_dim = yaml.safe_load(open("config.yaml", encoding="utf-8")).get("model_params", {}).get("openai_embedding_dim", 1024)
 
     index_params.add_index(
         field_name="dense",
@@ -22,7 +39,7 @@ def build_vector_search(data,working_dir):
         milvus_client.drop_collection(collection_name)
     milvus_client.create_collection(
         collection_name=collection_name,
-        dimension=1024,
+        dimension=embedding_dim,
         index_params=index_params,
         metric_type="IP",  # Inner product distance
         consistency_level="Strong",  # Supported values are (`"Strong"`, `"Session"`, `"Bounded"`, `"Eventually"`). See https://milvus.io/docs/consistency.md#Consistency-Level for more details.
@@ -101,8 +118,7 @@ def search_vector_search(working_dir,query,topk=10,level_mode=2):
     # print(extract_results)
     return extract_results
 def create_db_table_mysql(working_dir):
-    con = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    con = _mysql_connection()
     cur=con.cursor()
     dbname=os.path.basename(working_dir)
     
@@ -132,8 +148,7 @@ def create_db_table_mysql(working_dir):
     
 def insert_data_to_mysql(working_dir):
     dbname=os.path.basename(working_dir)
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',database=dbname,  charset='utf8mb4')
+    db = _mysql_connection(database=dbname)
     cursor = db.cursor()
     
     entity_path=os.path.join(working_dir,"all_entities.json")
@@ -219,8 +234,7 @@ def insert_data_to_mysql(working_dir):
             print(e)
             print("insert communities error")
 def find_tree_root(working_dir,entity):
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    db = _mysql_connection()
     dbname=os.path.basename(working_dir)
     res=[entity]
     cursor = db.cursor()
@@ -247,8 +261,7 @@ def find_tree_root(working_dir,entity):
     return res
 
 def find_path(entity1,entity2,working_dir,level,depth=5):
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    db = _mysql_connection()
     db_name=os.path.basename(working_dir)
     cursor = db.cursor()
 
@@ -307,8 +320,7 @@ def search_nodes_link(entity1,entity2,working_dir,level=0):
     #     return None
     # else:
     #     return ret[0]
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    db = _mysql_connection()
     cursor = db.cursor()
     db_name=os.path.basename(working_dir)
     sql=f"select * from {db_name}.relations where src_tgt=%s and tgt_src=%s "
@@ -323,8 +335,7 @@ def search_nodes_link(entity1,entity2,working_dir,level=0):
     else:
         return ret[0]
 def search_chunks(working_dir,entity_set):
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    db = _mysql_connection()
     res=[]
     db_name=os.path.basename(working_dir)
     cursor = db.cursor()
@@ -337,8 +348,7 @@ def search_chunks(working_dir,entity_set):
         res.append(ret[0])
     return res
 def search_nodes(entity_set,working_dir):
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    db = _mysql_connection()
     res=[]
     db_name=os.path.basename(working_dir)
     cursor = db.cursor()
@@ -386,8 +396,7 @@ def get_text_units(working_dir,chunks_set,chunks_file,k=5):
     return text_units
     
 def search_community(entity_name,working_dir):
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',  charset='utf8mb4')
+    db = _mysql_connection()
     db_name=os.path.basename(working_dir)
     cursor = db.cursor()
     sql=f"select * from {db_name}.communities where entity_name=%s"
@@ -400,8 +409,7 @@ def search_community(entity_name,working_dir):
             # return ret[0]
 def insert_origin_relations(working_dir):
     dbname=os.path.basename(working_dir)
-    db = pymysql.connect(host='localhost',port=4321, user='root',
-                      passwd='123',database=dbname,  charset='utf8mb4')
+    db = _mysql_connection(database=dbname)
     cursor = db.cursor()
     # relation_path=os.path.join(f"datasets/{dbname}","relation.jsonl")
     # relation_path=os.path.join(f"/data/zyz/reproduce/HiRAG/eval/datasets/{dbname}/test")
