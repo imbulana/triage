@@ -5,3 +5,8 @@ policy:
   max_parallel_agents: 3
   max_secondary_kgs: 2
   fail_closed_on_trace_errors: true
+  require_leanrag_retrieval: true
+  # Production/evaluation path: one valid model-backed decision per agent, no silent substitution.
+  allow_agent_fallbacks: false
+  allow_structured_repair: false
+  allow_empty_response_retry: false
