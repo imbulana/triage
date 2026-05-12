@@ -17,6 +17,8 @@ from ingestion.prepare_chunks import prepare_kg_chunks
 from ingestion.simple_kg import bootstrap_kg_from_chunks
 from orchestrator import ComplaintOrchestrator
 from query_service import QueryService
+from trace_events import TraceRecorder
+from trace_report import build_trace_report, write_trace_report
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -140,7 +142,7 @@ def cmd_build_bridges(args) -> None:
 
 
 def cmd_query(args) -> None:
-    service = QueryService(registry_path=args.registry)
+    service = QueryService(registry_path=args.registry, require_leanrag=not args.allow_local_fallback)
     result = service.query_kg(args.kg_id, args.query, topk_override=args.topk)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -150,10 +152,47 @@ def cmd_orchestrate(args) -> None:
         registry_path=args.registry,
         policy_path=args.policy,
         bridge_store_path=args.bridges,
+        require_leanrag=not args.allow_local_fallback,
     )
     complaint = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    result = orchestrator.run(complaint)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    trace = TraceRecorder(
+        events_path=args.events_output,
+        stream_events=args.stream_events,
+        langfuse_enabled=args.langfuse,
+        trace_id_seed=args.trace_id_seed,
+        capture_llm_io=args.trace_llm_io,
+        llm_io_max_chars=args.trace_llm_max_chars,
+        metadata={
+            "registry": args.registry,
+            "policy": args.policy,
+            "bridges": args.bridges,
+            "input": args.input,
+        },
+    )
+    try:
+        result = orchestrator.run(complaint, trace=trace)
+    finally:
+        trace.close()
+    text = json.dumps(result, ensure_ascii=False, indent=2)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(text + "\n", encoding="utf-8")
+    if args.trace_html:
+        Path(args.trace_html).parent.mkdir(parents=True, exist_ok=True)
+        events = trace.events
+        if args.events_output:
+            events = [
+                json.loads(line)
+                for line in Path(args.events_output).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        Path(args.trace_html).write_text(build_trace_report(result, events), encoding="utf-8")
+    print(text)
+
+
+def cmd_trace_report(args) -> None:
+    write_trace_report(args.result, args.events, args.output)
+    print(f"Wrote trace report to {args.output}")
 
 
 def main() -> None:
@@ -204,6 +243,7 @@ def main() -> None:
     p_query.add_argument("--kg-id", required=True)
     p_query.add_argument("--query", required=True)
     p_query.add_argument("--topk", type=int, default=None)
+    p_query.add_argument("--allow-local-fallback", action="store_true", help="Allow entity/chunk fallback when LeanRAG is unavailable")
     p_query.set_defaults(func=cmd_query)
 
     p_orc = sub.add_parser("orchestrate")
@@ -211,7 +251,27 @@ def main() -> None:
     p_orc.add_argument("--policy", default="configs/policy.yaml")
     p_orc.add_argument("--bridges", default="bridges/bridge_edges.json")
     p_orc.add_argument("--input", required=True, help="JSON complaint file")
+    p_orc.add_argument("--output", default=None, help="Optional path to write orchestrator JSON")
+    p_orc.add_argument("--events-output", default=None, help="Optional JSONL path for compact trace events")
+    p_orc.add_argument("--stream-events", action="store_true", help="Stream compact trace events to stderr as JSONL")
+    p_orc.add_argument("--trace-html", default=None, help="Optional HTML decision-trace report path")
+    p_orc.add_argument("--langfuse", action="store_true", help="Mirror trace spans to Langfuse using LANGFUSE_* env vars")
+    p_orc.add_argument("--trace-id-seed", default=None, help="Optional deterministic Langfuse trace-id seed")
+    p_orc.add_argument(
+        "--trace-llm-io",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Capture LLM prompt bodies in traces. Defaults to config.yaml trace.capture_llm_io.",
+    )
+    p_orc.add_argument("--trace-llm-max-chars", type=int, default=None, help="Max chars for captured LLM prompt/output bodies")
+    p_orc.add_argument("--allow-local-fallback", action="store_true", help="Allow entity/chunk fallback when LeanRAG is unavailable")
     p_orc.set_defaults(func=cmd_orchestrate)
+
+    p_trace = sub.add_parser("trace-report")
+    p_trace.add_argument("--result", required=True, help="Orchestrator result JSON file")
+    p_trace.add_argument("--events", default=None, help="Optional JSONL event stream")
+    p_trace.add_argument("--output", required=True, help="HTML report output path")
+    p_trace.set_defaults(func=cmd_trace_report)
 
     args = parser.parse_args()
     logging.basicConfig(
