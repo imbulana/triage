@@ -21,3 +21,10 @@ openai:
 model_params:
   openai_embedding_dim: 768
   max_token_size: 8192
+  leanrag_response_max_tokens: 220
+  agent_response_max_tokens: 1200
+  resolution_response_max_tokens: 1100
+
+trace:
+  capture_llm_io: true
+  llm_io_max_chars: 24000

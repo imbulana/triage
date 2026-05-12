@@ -25,6 +25,7 @@ LLM_SETTINGS = load_llm_settings()
 OPENAI_API_KEY = LLM_SETTINGS["api_key"]
 OPENAI_BASE_URL = LLM_SETTINGS["base_url"]
 OPENAI_EMBEDDING_MODEL = LLM_SETTINGS["embedding_model"]
+LEANRAG_RESPONSE_MAX_TOKENS = int(config.get("model_params", {}).get("leanrag_response_max_tokens", 220))
 TOTAL_TOKEN_COST = 0
 TOTAL_API_CALL_COST = 0
 
@@ -153,12 +154,23 @@ def query_graph(global_config,db,query):
     
     # print(describe)
     sys_prompt =PROMPTS["rag_response"].format(context_data=describe)
-    response=use_llm_func(query,system_prompt=sys_prompt)
+    response=use_llm_func(
+        query,
+        system_prompt=sys_prompt,
+        max_tokens=LEANRAG_RESPONSE_MAX_TOKENS,
+        __trace_name="llm.leanrag_response",
+        __trace_metadata={
+            "purpose": "leanrag_evidence_response",
+            "working_dir": global_config.get("working_dir"),
+            "topk": topk,
+            "level_mode": level_mode,
+            "context_chars": len(describe),
+        },
+    )
     g=time.time()
-    print(f"embedding time: {v-b:.2f}s")
-    print(f"query time: {e-v:.2f}s")
-    
-    print(f"response time: {g-e:.2f}s")
+    logger.info("embedding time: %.2fs", v - b)
+    logger.info("query time: %.2fs", e - v)
+    logger.info("response time: %.2fs", g - e)
     return describe,response
 if __name__=="__main__":
     from database_utils import _mysql_connection

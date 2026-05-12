@@ -1,10 +1,13 @@
 import json
+import logging
 import os
 import numpy as np
 from pymilvus  import MilvusClient
 import pymysql
 import yaml
 from collections import Counter
+
+logger = logging.getLogger(__name__)
 
 
 def _mysql_connection(database=None):
@@ -98,10 +101,10 @@ def search_vector_search(working_dir,query,topk=10,level_mode=2):
         filter_filed=""
     dataset=os.path.basename(working_dir)
     if os.path.exists(f"{working_dir}/milvus_demo.db"):
-        print(f"{working_dir}milvus_demo.db already exists, using it")
+        logger.info("%s/milvus_demo.db already exists, using it", working_dir)
         milvus_client = MilvusClient(uri=f"{working_dir}/milvus_demo.db")
     else:
-        print("milvus_demo.db not found, using default")
+        logger.info("milvus_demo.db not found for %s, using default", working_dir)
         milvus_client = MilvusClient(uri=f"/data/zyz/trag_ds/exp/ds_hire_cs20_top20_chunk5/{dataset}/milvus_demo.db")
     collection_name = "entity_collection"
     # query_embedding = emb_text(query)
