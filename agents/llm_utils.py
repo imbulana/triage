@@ -11,7 +11,14 @@ def evidence_summary(evidence: List[Dict], max_items: int = 4) -> str:
             continue
         entities = ", ".join(item.get("entities", [])[:8])
         response = " ".join(str(item.get("response", "")).split())[:500]
-        rows.append(f"- {kg_id}: entities=[{entities}] response={response}")
+        relevance = item.get("retrieval_relevance")
+        warning = item.get("retrieval_warning")
+        relevance_text = ""
+        if relevance:
+            relevance_text = f" relevance={relevance}"
+        if warning:
+            relevance_text = f"{relevance_text} warning={warning}"
+        rows.append(f"- {kg_id}:{relevance_text} entities=[{entities}] response={response}")
     return "\n".join(rows) if rows else "- no KG evidence"
 
 

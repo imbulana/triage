@@ -1,3 +1,4 @@
+import json
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -6,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
 
+DEFAULT_TAXONOMY_SCHEMA = Path("configs/cfpb_taxonomy_schema.json")
 DEFAULT_TAXONOMY_XMLS = [
     Path("data/xml_sources_fast/kg_complaints_core/cfpb_consumer_complaint_form_product_issue_options_August_2023_FINAL.xml"),
     Path("data/xml_sources/kg_complaints_core/cfpb_consumer_complaint_form_product_issue_options_August_2023_FINAL.xml"),
@@ -29,13 +31,17 @@ PRODUCT_HEADINGS = {
 INTERNAL_PRODUCT_TO_CFPB_PRODUCTS = {
     "banking": {
         "Checking or savings account",
-        "Money transfer, virtual currency, or money service",
-        "Prepaid card",
     },
-    "credit_card": {"Credit card", "Prepaid card"},
+    "credit_card": {"Credit card"},
     "credit_reporting": {"Credit reporting or other personal consumer reports"},
+    "debt_collection": {"Debt collection"},
+    "debt_or_credit_management": {"Debt or credit management"},
+    "money_transfer": {"Money transfer, virtual currency, or money service"},
     "mortgage": {"Mortgage"},
+    "payday_personal_loan": {"Payday loan, title loan, personal loan, or advance loan"},
+    "prepaid_card": {"Prepaid card"},
     "student_loan": {"Student loan"},
+    "vehicle_loan": {"Vehicle loan or lease"},
 }
 
 INTERNAL_ISSUE_HINTS = {
@@ -112,12 +118,106 @@ class TaxonomyPath:
 
 @lru_cache(maxsize=1)
 def load_cfpb_taxonomy() -> List[TaxonomyPath]:
+    schema = load_cfpb_taxonomy_schema()
+    paths = [_path_from_schema_row(row) for row in schema.get("paths", [])]
+    if paths:
+        return paths
+    return _load_cfpb_taxonomy_from_xml()
+
+
+@lru_cache(maxsize=1)
+def load_cfpb_taxonomy_schema() -> Dict[str, object]:
+    if DEFAULT_TAXONOMY_SCHEMA.exists():
+        with DEFAULT_TAXONOMY_SCHEMA.open(encoding="utf-8") as f:
+            return json.load(f)
+    paths = _load_cfpb_taxonomy_from_xml()
+    return build_cfpb_taxonomy_schema(paths, source="xml_fallback")
+
+
+def cfpb_label_sets(include_unknown: bool = True) -> Dict[str, tuple[str, ...]]:
+    labels = load_cfpb_taxonomy_schema().get("labels", {})
+    result = {}
+    for key in ["products", "sub_products", "issues", "sub_issues"]:
+        values = list(labels.get(key, []))
+        if include_unknown and "unknown" not in values:
+            values.append("unknown")
+        result[key] = tuple(sorted(values))
+    return result
+
+
+def build_cfpb_taxonomy_schema(paths: Sequence[TaxonomyPath], source: str = "") -> Dict[str, object]:
+    rows = [
+        {
+            "product": path.product,
+            "sub_product": path.sub_product,
+            "issue": path.issue,
+            "sub_issue": path.sub_issue,
+        }
+        for path in _dedupe_paths(paths)
+    ]
+    labels = {
+        "products": sorted({row["product"] for row in rows}),
+        "sub_products": sorted({row["sub_product"] for row in rows}),
+        "issues": sorted({row["issue"] for row in rows}),
+        "sub_issues": sorted({row["sub_issue"] for row in rows}),
+    }
+    return {
+        "schema_version": 1,
+        "source": source or "CFPB consumer complaint form product issue options, August 2023",
+        "counts": {
+            "products": len(labels["products"]),
+            "sub_products": len(labels["sub_products"]),
+            "issues": len(labels["issues"]),
+            "sub_issues": len(labels["sub_issues"]),
+            "paths": len(rows),
+        },
+        "labels": labels,
+        "paths": rows,
+        "hierarchy": _build_hierarchy(rows),
+    }
+
+
+def write_cfpb_taxonomy_schema(output_path: Path = DEFAULT_TAXONOMY_SCHEMA) -> Dict[str, object]:
+    paths = _load_cfpb_taxonomy_from_xml()
+    schema = build_cfpb_taxonomy_schema(paths)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    load_cfpb_taxonomy.cache_clear()
+    load_cfpb_taxonomy_schema.cache_clear()
+    return schema
+
+
+def _load_cfpb_taxonomy_from_xml() -> List[TaxonomyPath]:
     for path in DEFAULT_TAXONOMY_XMLS:
         if path.exists():
             parsed = _parse_taxonomy_xml(path)
             if parsed:
                 return parsed
     return []
+
+
+def _path_from_schema_row(row: Dict[str, object]) -> TaxonomyPath:
+    return TaxonomyPath(
+        product=str(row.get("product") or row.get("cfpb_product") or ""),
+        sub_product=str(row.get("sub_product") or row.get("cfpb_sub_product") or ""),
+        issue=str(row.get("issue") or row.get("cfpb_issue") or ""),
+        sub_issue=str(row.get("sub_issue") or row.get("cfpb_sub_issue") or "unknown"),
+    )
+
+
+def _build_hierarchy(rows: Sequence[Dict[str, str]]) -> Dict[str, object]:
+    hierarchy: Dict[str, object] = {}
+    for row in rows:
+        product = row["product"]
+        sub_product = row["sub_product"]
+        issue = row["issue"]
+        sub_issue = row["sub_issue"]
+        product_node = hierarchy.setdefault(product, {})
+        sub_product_node = product_node.setdefault(sub_product, {})
+        subissues = sub_product_node.setdefault(issue, [])
+        if sub_issue not in subissues:
+            subissues.append(sub_issue)
+    return hierarchy
 
 
 def candidate_taxonomy_paths(

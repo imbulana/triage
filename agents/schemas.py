@@ -2,13 +2,24 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from cfpb_taxonomy import cfpb_label_sets
+
+
+CFPB_LABEL_SETS = cfpb_label_sets(include_unknown=True)
+
 
 ProductLabel = Literal[
     "banking",
     "credit_card",
     "credit_reporting",
+    "debt_collection",
+    "debt_or_credit_management",
+    "money_transfer",
     "mortgage",
+    "payday_personal_loan",
+    "prepaid_card",
     "student_loan",
+    "vehicle_loan",
     "unknown",
 ]
 
@@ -40,18 +51,45 @@ class DomainClassification(BaseModel):
 
     product: ProductLabel = Field(description="Internal normalized product label.")
     cfpb_product: str = Field(
-        description="Exact CFPB Product taxonomy string, e.g. 'Checking or savings account'. Do not normalize."
+        description="Exact CFPB Product taxonomy string, e.g. 'Checking or savings account'. Do not normalize.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["products"])},
     )
     cfpb_sub_product: str = Field(
-        description="Exact CFPB Sub-product taxonomy string, e.g. 'Checking account'. Do not normalize."
+        description="Exact CFPB Sub-product taxonomy string, e.g. 'Checking account'. Do not normalize.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["sub_products"])},
     )
     issue: IssueLabel = Field(description="Internal normalized issue label.")
     cfpb_issue: str = Field(
-        description="Exact CFPB Issue taxonomy string, e.g. 'Managing an account'. Do not normalize."
+        description="Exact CFPB Issue taxonomy string, e.g. 'Managing an account'. Do not normalize.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["issues"])},
     )
     sub_issue: Optional[str] = Field(default=None, description="Internal normalized sub-issue label or null.")
     cfpb_sub_issue: str = Field(
-        description="Exact CFPB Sub-issue taxonomy string, e.g. 'Funds not handled or disbursed as instructed'. Do not normalize."
+        description="Exact CFPB Sub-issue taxonomy string, e.g. 'Funds not handled or disbursed as instructed'. Do not normalize.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["sub_issues"])},
+    )
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str
+
+
+class CFPBDomainClassification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product: str = Field(
+        description="Exact CFPB Product taxonomy string, e.g. 'Checking or savings account'.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["products"])},
+    )
+    sub_product: str = Field(
+        description="Exact CFPB Sub-product taxonomy string, e.g. 'Checking account'.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["sub_products"])},
+    )
+    issue: str = Field(
+        description="Exact CFPB Issue taxonomy string, e.g. 'Managing an account'.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["issues"])},
+    )
+    sub_issue: str = Field(
+        description="Exact CFPB Sub-issue taxonomy string, e.g. 'Funds not handled or disbursed as instructed'.",
+        json_schema_extra={"enum": list(CFPB_LABEL_SETS["sub_issues"])},
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str

@@ -1,7 +1,13 @@
-from typing import Optional
+from typing import Dict, Optional
 
 
-def agent_retrieval_query(agent: str, complaint_text: str, product_hint: Optional[str] = None, route: Optional[str] = None) -> str:
+def agent_retrieval_query(
+    agent: str,
+    complaint_text: str,
+    product_hint: Optional[str] = None,
+    route: Optional[str] = None,
+    classification: Optional[Dict] = None,
+) -> str:
     narrative = str(complaint_text or "").strip()
     focus = {
         "domain": (
@@ -24,7 +30,8 @@ def agent_retrieval_query(agent: str, complaint_text: str, product_hint: Optiona
         "resolution": (
             "Find evidence useful for an internal resolution plan. Prioritize concrete investigation "
             "steps, account or transaction records to review, remediation workflows, customer-response "
-            "requirements, and preventive controls."
+            "requirements, preventive controls, and policy/taxonomy evidence for the specific CFPB "
+            "product, issue, and sub-issue."
         ),
     }.get(agent, "Find evidence relevant to the complaint triage decision.")
 
@@ -36,10 +43,23 @@ def agent_retrieval_query(agent: str, complaint_text: str, product_hint: Optiona
         lines.append(f"Known product hint: {product_hint}")
     if route:
         lines.append(f"Known owner route: {route}")
+    if classification:
+        lines.extend(
+            [
+                "Known classification:",
+                f"- internal_product: {classification.get('product', 'unknown')}",
+                f"- internal_issue: {classification.get('issue', 'unknown')}",
+                f"- cfpb_product: {classification.get('cfpb_product', 'unknown')}",
+                f"- cfpb_sub_product: {classification.get('cfpb_sub_product', 'unknown')}",
+                f"- cfpb_issue: {classification.get('cfpb_issue', 'unknown')}",
+                f"- cfpb_sub_issue: {classification.get('cfpb_sub_issue', 'unknown')}",
+            ]
+        )
     lines.extend(
         [
             "",
             "Return only evidence grounded in this KG that helps the task. If the KG does not contain relevant evidence, say that briefly.",
+            "Prefer exact taxonomy/process phrases from the known classification over broad financial data-governance concepts.",
             "",
             "Complaint narrative:",
             narrative[:6000],

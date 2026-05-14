@@ -34,13 +34,17 @@ class ResolutionAgent:
         self.allow_structured_repair = allow_structured_repair
         self.allow_empty_response_retry = allow_empty_response_retry
 
-    def run(self, kg_ids: List[str], complaint_text: str, route: str) -> Dict:
-        evidence = self.query_service.query_many(
-            kg_ids,
-            agent_retrieval_query("resolution", complaint_text, route=route),
+    def run(self, kg_ids: List[str], complaint_text: str, route: str, classification: Optional[Dict] = None) -> Dict:
+        query = agent_retrieval_query(
+            "resolution",
+            complaint_text,
+            product_hint=(classification or {}).get("product"),
+            route=route,
+            classification=classification,
         )
+        evidence = self.query_service.query_many(kg_ids, query)
         fallback = self._template_plan(complaint_text, route, evidence)
-        plan, plan_error = self._model_plan(complaint_text, route, evidence, fallback)
+        plan, plan_error = self._model_plan(complaint_text, route, evidence, fallback, classification or {})
         result = {
             "agent": "resolution",
             "evidence": evidence,
@@ -97,8 +101,9 @@ class ResolutionAgent:
         route: str,
         evidence: List[Dict],
         fallback: Dict,
+        classification: Dict,
     ) -> Tuple[Dict, Optional[str]]:
-        prompt = _resolution_prompt(complaint_text, route, evidence, fallback)
+        prompt = _resolution_prompt(complaint_text, route, evidence, fallback, classification)
         system_prompt = (
             "You are a CFPB complaint resolution planning agent. Produce an internal handling plan, not legal advice. Return only JSON matching the provided schema."
         )
@@ -134,7 +139,13 @@ class ResolutionAgent:
         return {**parsed.model_dump(), "source": "llm"}, None
 
 
-def _resolution_prompt(complaint_text: str, route: str, evidence: List[Dict], _template: Dict) -> str:
+def _resolution_prompt(
+    complaint_text: str,
+    route: str,
+    evidence: List[Dict],
+    _template: Dict,
+    classification: Dict,
+) -> str:
     return "\n".join(
         [
             "Create a concise operational resolution plan for this complaint.",
@@ -143,7 +154,13 @@ def _resolution_prompt(complaint_text: str, route: str, evidence: List[Dict], _t
             '{"resolution_plan": {"owner_team": "...", "actions": ["..."], "customer_response": "...", "preventive_recommendations": ["..."]}, "confidence": 0.0-1.0, "rationale": "..."}',
             "",
             f"Owner team route: {route}",
+            "Known classification:",
+            _format_classification(classification),
+            "",
             "Actions should be concrete internal handling steps, not legal advice.",
+            "Use the complaint narrative for complaint-specific facts such as dates, amounts, transaction sequence, and alleged bank statements.",
+            "Use KG evidence for taxonomy, policy, workflow, and control grounding; do not require KG evidence to restate every complaint-specific fact.",
+            "If any evidence row is marked irrelevant, ignore it except to note that retrieval was insufficient for that KG.",
             "Customer response should be short, empathetic, and non-committal until investigation confirms facts.",
             "Do not tell the consumer to contact regulators, hire counsel, or gather documents; this plan is for the institution handling the complaint.",
             "Keep rationale to one sentence.",
@@ -154,3 +171,17 @@ def _resolution_prompt(complaint_text: str, route: str, evidence: List[Dict], _t
             complaint_text[:6000],
         ]
     )
+
+
+def _format_classification(classification: Dict) -> str:
+    if not classification:
+        return "- unavailable"
+    keys = [
+        "product",
+        "issue",
+        "cfpb_product",
+        "cfpb_sub_product",
+        "cfpb_issue",
+        "cfpb_sub_issue",
+    ]
+    return "\n".join(f"- {key}: {classification.get(key, 'unknown')}" for key in keys)
