@@ -26,6 +26,7 @@ OPENAI_API_KEY = LLM_SETTINGS["api_key"]
 OPENAI_BASE_URL = LLM_SETTINGS["base_url"]
 OPENAI_EMBEDDING_MODEL = LLM_SETTINGS["embedding_model"]
 LEANRAG_RESPONSE_MAX_TOKENS = int(config.get("model_params", {}).get("leanrag_response_max_tokens", 220))
+LEANRAG_CONTEXT_MAX_TOKENS = int(config.get("model_params", {}).get("leanrag_context_max_tokens", 4200))
 TOTAL_TOKEN_COST = 0
 TOTAL_API_CALL_COST = 0
 
@@ -49,6 +50,34 @@ def truncate_text(text, max_tokens=4096):
         tokens = tokens[:max_tokens]
     truncated_text = tokenizer.decode(tokens)
     return truncated_text
+
+def truncate_section(text, max_tokens):
+    if max_tokens <= 0:
+        return ""
+    return truncate_text(text or "", max_tokens=max_tokens)
+
+def build_budgeted_context(entity_descriptions, aggregation_descriptions, reasoning_path_information_description, text_units):
+    sections = [
+        ("entity_information", entity_descriptions, 900),
+        ("aggregation_entity_information", aggregation_descriptions, 800),
+        ("reasoning_path_information", reasoning_path_information_description, 900),
+        ("text_units", text_units, 1600),
+    ]
+    total_budget = LEANRAG_CONTEXT_MAX_TOKENS
+    used = 0
+    rendered = []
+    truncated_sections = []
+    for name, value, preferred_budget in sections:
+        remaining = max(0, total_budget - used)
+        section_budget = min(preferred_budget, remaining)
+        original_tokens = len(tokenizer.encode(value or ""))
+        section_text = truncate_section(value, section_budget)
+        used += len(tokenizer.encode(section_text))
+        if original_tokens > section_budget:
+            truncated_sections.append(name)
+        rendered.append(f"    {name}:\n    {section_text}")
+    describe = "\n".join(rendered)
+    return describe, truncated_sections
 
 def get_reasoning_chain(global_config,entities_set):
     maybe_edges=list(combinations(entities_set,2))
@@ -140,22 +169,24 @@ def query_graph(global_config,db,query):
     aggregation_descriptions,aggregation=get_aggregation_description(global_config,reasoning_path)
     # chunks=search_chunks(global_config['working_dir'],aggregation)
     text_units=get_text_units(global_config['working_dir'],chunks,chunks_file,k=5)
-    describe=f"""
-    entity_information:
-    {entity_descriptions}
-    aggregation_entity_information:
-    {aggregation_descriptions}
-    reasoning_path_information:
-    {reasoning_path_information_description}
-    text_units:
-    {text_units}
-    """
+    describe,truncated_sections=build_budgeted_context(
+        entity_descriptions,
+        aggregation_descriptions,
+        reasoning_path_information_description,
+        text_units,
+    )
     e=time.time()
     
     # print(describe)
     sys_prompt =PROMPTS["rag_response"].format(context_data=describe)
+    evidence_prompt = (
+        "Evidence request:\n"
+        f"{query}\n\n"
+        "Return only a concise KG evidence summary supported by the data tables. "
+        "Do not provide advice, disclaimers, or account-specific caveats."
+    )
     response=use_llm_func(
-        query,
+        evidence_prompt,
         system_prompt=sys_prompt,
         max_tokens=LEANRAG_RESPONSE_MAX_TOKENS,
         __trace_name="llm.leanrag_response",
@@ -165,6 +196,8 @@ def query_graph(global_config,db,query):
             "topk": topk,
             "level_mode": level_mode,
             "context_chars": len(describe),
+            "context_tokens_estimate": len(tokenizer.encode(describe)),
+            "truncated_sections": truncated_sections,
         },
     )
     g=time.time()

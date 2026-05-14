@@ -121,7 +121,7 @@ class KGSelector:
         embed_texts: Optional[Callable[[List[str]], List[List[float]]]] = None,
         semantic_enabled: bool = True,
         community_probe_enabled: bool = True,
-        community_probe_required: bool = False,
+        community_probe_required: bool = True,
         bridge_edges: Optional[Callable[[], Iterable[Any]] | Iterable[Any]] = None,
     ):
         self.registry = registry
@@ -158,6 +158,7 @@ class KGSelector:
             "domain_kgs": domain_kgs[:max_domain_kgs],
             "compliance_kgs": [kg_id for kg_id in ["kg_regulatory_policy"] if kg_id in available],
             "routing_kgs": [kg_id for kg_id in ["kg_regulatory_policy", "kg_complaints_core"] if kg_id in available],
+            "resolution_kgs": self._resolution_kgs(domain_kgs[:max_domain_kgs], available),
             "domain_kg_scores": [
                 {"kg_id": kg_id, "score": score}
                 for kg_id, score in scores
@@ -211,6 +212,7 @@ class KGSelector:
             "domain_kgs": domain_kgs[:max_domain_kgs],
             "compliance_kgs": [kg_id for kg_id in ["kg_regulatory_policy"] if kg_id in available],
             "routing_kgs": [kg_id for kg_id in ["kg_regulatory_policy", "kg_complaints_core"] if kg_id in available],
+            "resolution_kgs": self._resolution_kgs(domain_kgs[:max_domain_kgs], available),
             "domain_kg_scores": [
                 {"kg_id": kg_id, "score": score}
                 for kg_id, score in combined
@@ -221,6 +223,13 @@ class KGSelector:
             "supporting_kgs": [kg_id for kg_id, _ in combined[1:max_domain_kgs]],
             "community_probe": trajectory,
         }
+
+    def _resolution_kgs(self, domain_kgs: List[str], available: Set[str]) -> List[str]:
+        return _unique_in_order(
+            kg_id
+            for kg_id in ["kg_complaints_core", "kg_regulatory_policy", *domain_kgs]
+            if kg_id in available
+        )
 
     def available_kgs(self) -> Set[str]:
         return {kg_id for kg_id, entry in self.registry.items() if getattr(entry, "enabled", True)}

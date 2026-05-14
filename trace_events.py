@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from contextvars import ContextVar
@@ -120,6 +121,7 @@ def summarize_kg_selection(selected: Dict[str, Any]) -> Dict[str, Any]:
         "domain_kgs": selected.get("domain_kgs", []),
         "compliance_kgs": selected.get("compliance_kgs", []),
         "routing_kgs": selected.get("routing_kgs", []),
+        "resolution_kgs": selected.get("resolution_kgs", []),
         "domain_kg_scores": compact_value(selected.get("domain_kg_scores", []), max_items=6),
         "community_probe": {
             "available": probe.get("available"),
@@ -203,8 +205,9 @@ def summarize_final_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class TraceObservation:
-    def __init__(self, langfuse_observation: Any = None):
+    def __init__(self, langfuse_observation: Any = None, output_max_chars: int = 3000):
         self.langfuse_observation = langfuse_observation
+        self.output_max_chars = output_max_chars
         self.output: Any = None
         self.metadata: Dict[str, Any] = {}
 
@@ -221,12 +224,23 @@ class TraceObservation:
         if self.langfuse_observation is not None:
             try:
                 self.langfuse_observation.update(
-                    output=compact_value(output, max_chars=3000) if output is not None else None,
+                    output=compact_value(output, max_chars=self.output_max_chars) if output is not None else None,
                     metadata=compact_value(metadata or {}, max_chars=3000, max_items=20),
                     **kwargs,
                 )
             except Exception:
                 pass
+
+    def flush_to_langfuse(self) -> None:
+        if self.langfuse_observation is None or self.output is None:
+            return
+        try:
+            self.langfuse_observation.update(
+                output=compact_value(self.output, max_chars=self.output_max_chars),
+                metadata=compact_value(self.metadata, max_chars=3000, max_items=20),
+            )
+        except Exception:
+            pass
 
 
 class TraceRecorder:
@@ -253,6 +267,7 @@ class TraceRecorder:
         self._event_file = None
         self._langfuse = None
         self._langfuse_trace_id = None
+        self._lock = threading.RLock()
         self._langfuse_enabled = _env_bool("TRIAGE_LANGFUSE", False) if langfuse_enabled is None else langfuse_enabled
         config = _trace_config()
         configured_capture = bool(config.get("capture_llm_io", False))
@@ -278,6 +293,10 @@ class TraceRecorder:
     def enabled(self) -> bool:
         return bool(self._event_file or self.stream_events or self._langfuse)
 
+    @property
+    def langfuse_trace_id(self) -> Optional[str]:
+        return self._langfuse_trace_id
+
     def _init_langfuse(self, trace_id_seed: str) -> None:
         if os.getenv("LANGFUSE_BASE_URL") and not os.getenv("LANGFUSE_HOST"):
             os.environ["LANGFUSE_HOST"] = os.getenv("LANGFUSE_BASE_URL", "")
@@ -290,6 +309,18 @@ class TraceRecorder:
             ) from exc
         self._langfuse = get_client()
         try:
+            if not self._langfuse.auth_check():
+                raise RuntimeError(
+                    "Langfuse authentication failed. Set LANGFUSE_PUBLIC_KEY, "
+                    "LANGFUSE_SECRET_KEY, and LANGFUSE_HOST before running with --langfuse."
+                )
+        except RuntimeError:
+            self._langfuse = None
+            raise
+        except Exception as exc:
+            self._langfuse = None
+            raise RuntimeError(f"Langfuse authentication check failed: {exc}") from exc
+        try:
             self._langfuse_trace_id = self._langfuse.create_trace_id(seed=trace_id_seed)
         except Exception:
             self._langfuse_trace_id = None
@@ -297,24 +328,25 @@ class TraceRecorder:
     def emit(self, event_type: str, payload: Optional[Dict[str, Any]] = None, level: str = "INFO") -> None:
         if not self.enabled:
             return
-        self.sequence += 1
-        event = {
-            "sequence": self.sequence,
-            "time": _utc_now(),
-            "elapsed_ms": round((time.perf_counter() - self.started_at) * 1000, 3),
-            "run_id": self.run_id,
-            "trace_name": self.trace_name,
-            "level": level,
-            "event_type": event_type,
-            "payload": compact_value(payload or {}, max_chars=self.llm_io_max_chars, max_items=20),
-        }
-        self.events.append(event)
-        line = json.dumps(event, ensure_ascii=False)
-        if self._event_file:
-            self._event_file.write(line + "\n")
-            self._event_file.flush()
-        if self.stream_events:
-            print(line, file=sys.stderr, flush=True)
+        with self._lock:
+            self.sequence += 1
+            event = {
+                "sequence": self.sequence,
+                "time": _utc_now(),
+                "elapsed_ms": round((time.perf_counter() - self.started_at) * 1000, 3),
+                "run_id": self.run_id,
+                "trace_name": self.trace_name,
+                "level": level,
+                "event_type": event_type,
+                "payload": compact_value(payload or {}, max_chars=self.llm_io_max_chars, max_items=20),
+            }
+            self.events.append(event)
+            line = json.dumps(event, ensure_ascii=False)
+            if self._event_file:
+                self._event_file.write(line + "\n")
+                self._event_file.flush()
+            if self.stream_events:
+                print(line, file=sys.stderr, flush=True)
 
     def _langfuse_context(
         self,
@@ -330,7 +362,11 @@ class TraceRecorder:
         kwargs: Dict[str, Any] = {
             "as_type": as_type,
             "name": name,
-            "input": compact_value(input_value, max_chars=self.llm_io_max_chars),
+            "input": compact_value(
+                self._langfuse_input_value(input_value, as_type),
+                max_chars=self.llm_io_max_chars,
+                max_items=20,
+            ),
         }
         if model:
             kwargs["model"] = model
@@ -339,9 +375,76 @@ class TraceRecorder:
         merged_metadata = {**self.metadata, **metadata, "local_run_id": self.run_id}
         if merged_metadata:
             kwargs["metadata"] = compact_value(merged_metadata, max_chars=3000, max_items=20)
-        if self._depth == 0 and self._langfuse_trace_id:
+        with self._lock:
+            is_root_depth = self._depth == 0
+        if is_root_depth and self._langfuse_trace_id:
             kwargs["trace_context"] = {"trace_id": self._langfuse_trace_id}
         return self._langfuse.start_as_current_observation(**kwargs)
+
+    def score_trace(
+        self,
+        *,
+        name: str,
+        value: Any,
+        data_type: str = "NUMERIC",
+        comment: Optional[str] = None,
+        score_id: Optional[str] = None,
+        config_id: Optional[str] = None,
+    ) -> bool:
+        if self._langfuse is None or not self._langfuse_trace_id:
+            return False
+        kwargs = {
+            "trace_id": self._langfuse_trace_id,
+            "name": name,
+            "value": value,
+            "data_type": data_type,
+        }
+        if comment:
+            kwargs["comment"] = comment[:500]
+        if score_id:
+            kwargs["score_id"] = score_id
+        if config_id:
+            kwargs["config_id"] = config_id
+        try:
+            self._langfuse.create_score(**kwargs)
+            self.emit(
+                "langfuse.score.created",
+                {
+                    "trace_id": self._langfuse_trace_id,
+                    "name": name,
+                    "value": value,
+                    "data_type": data_type,
+                },
+            )
+            return True
+        except Exception as exc:
+            self.emit(
+                "langfuse.score.failed",
+                {
+                    "trace_id": self._langfuse_trace_id,
+                    "name": name,
+                    "error": str(exc),
+                },
+                level="ERROR",
+            )
+            return False
+
+    def _langfuse_input_value(self, input_value: Any, as_type: str) -> Any:
+        if as_type != "generation" or not isinstance(input_value, dict):
+            return input_value
+        if not ("system_prompt" in input_value or "prompt" in input_value):
+            return input_value
+        messages = []
+        system_prompt = input_value.get("system_prompt")
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        history_messages = input_value.get("history_messages") or []
+        if isinstance(history_messages, list):
+            messages.extend(history_messages)
+        prompt = input_value.get("prompt")
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        return messages or input_value
 
     @contextmanager
     def span(
@@ -356,11 +459,12 @@ class TraceRecorder:
         self.emit(f"{name}.started", {"span_id": span_id, "input": input_value, "metadata": metadata})
         started = time.perf_counter()
         cm = self._langfuse_context(name, input_value, metadata, as_type)
-        self._depth += 1
+        with self._lock:
+            self._depth += 1
         token = _CURRENT_RECORDER.set(self)
         try:
             langfuse_observation = cm.__enter__()
-            observation = TraceObservation(langfuse_observation)
+            observation = TraceObservation(langfuse_observation, output_max_chars=self.llm_io_max_chars)
             yield observation
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started) * 1000, 3)
@@ -388,10 +492,13 @@ class TraceRecorder:
             )
         finally:
             try:
+                if "observation" in locals():
+                    observation.flush_to_langfuse()
                 cm.__exit__(*sys.exc_info())
             finally:
                 _CURRENT_RECORDER.reset(token)
-                self._depth -= 1
+                with self._lock:
+                    self._depth -= 1
 
     @contextmanager
     def generation(
@@ -423,11 +530,12 @@ class TraceRecorder:
             model=model,
             model_parameters=model_parameters,
         )
-        self._depth += 1
+        with self._lock:
+            self._depth += 1
         token = _CURRENT_RECORDER.set(self)
         try:
             langfuse_observation = cm.__enter__()
-            observation = TraceObservation(langfuse_observation)
+            observation = TraceObservation(langfuse_observation, output_max_chars=self.llm_io_max_chars)
             yield observation
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started) * 1000, 3)
@@ -456,10 +564,13 @@ class TraceRecorder:
             )
         finally:
             try:
+                if "observation" in locals():
+                    observation.flush_to_langfuse()
                 cm.__exit__(*sys.exc_info())
             finally:
                 _CURRENT_RECORDER.reset(token)
-                self._depth -= 1
+                with self._lock:
+                    self._depth -= 1
 
     def llm_input(
         self,

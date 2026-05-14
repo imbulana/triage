@@ -250,12 +250,19 @@ class QueryService:
                 }
                 context, response = query_graph(global_config=global_config, db=None, query=query)
                 response = self._normalize_retrieval_response(response)
+                if self._is_low_quality_retrieval_response(response):
+                    extractive_response = self._extractive_evidence_summary(query, context)
+                    if extractive_response:
+                        response = extractive_response
+                relevance, warning = self._retrieval_relevance(response)
                 return {
                     "kg_id": kg_id,
                     "context": context,
                     "response": response,
                     "entities": self._parse_entities_from_context(context),
                     "retrieval_mode": "leanrag",
+                    "retrieval_relevance": relevance,
+                    "retrieval_warning": warning,
                 }
             except Exception as exc:
                 if self.require_leanrag:
@@ -307,12 +314,19 @@ class QueryService:
                 f"because the configured model backend was unavailable: {exc}"
             )
         response = self._normalize_retrieval_response(response)
+        if self._is_low_quality_retrieval_response(response):
+            extractive_response = self._extractive_evidence_summary(query, context)
+            if extractive_response:
+                response = extractive_response
+        relevance, warning = self._retrieval_relevance(response)
         return {
             "kg_id": entry.kg_id,
             "context": context,
             "response": response,
             "entities": [row.get("entity_name", "") for row in ranked_entities if row.get("entity_name")],
             "retrieval_mode": "local",
+            "retrieval_relevance": relevance,
+            "retrieval_warning": warning,
         }
 
     def _normalize_retrieval_response(self, response: str) -> str:
@@ -326,6 +340,115 @@ class QueryService:
         if alpha_count < 5:
             return "No task-relevant KG evidence found."
         return text
+
+    def _retrieval_relevance(self, response: str) -> tuple[str, Optional[str]]:
+        text = str(response or "").strip().lower()
+        irrelevant_markers = [
+            "no task-relevant kg evidence found",
+            "no evidence found",
+            "no specific evidence",
+            "no relevant evidence",
+            "does not contain task-relevant",
+            "does not contain specific evidence",
+            "does not contain any information relevant",
+            "does not contain any information",
+            "cannot provide evidence directly",
+            "cannot provide actionable evidence",
+            "not contain any information that allows",
+            "not provide specific information",
+            "not directly detail",
+            "not directly address",
+            "does not contain specific information relevant",
+            "general regulatory and procedural information",
+            "since i do not have",
+            "i do not have access",
+            "here is a framework",
+            "i can provide general information",
+            "typical steps involved",
+            "not a financial advisor",
+            "not a regulatory authority",
+            "the provided text is a collection of legal and regulatory information",
+            "dense collection of legal and regulatory text",
+            "primarily focusing on data privacy",
+            "data sharing, and the establishment of standards",
+            "the provided text describes",
+            "subsequent to reviewing the provided input",
+        ]
+        low_information = {"unknown", "§ unknown", "id_data", "n/a", "none"}
+        if (
+            not text
+            or text in low_information
+            or "check_known_training_material" in text
+            or "check_the_context" in text
+            or any(marker in text for marker in irrelevant_markers)
+        ):
+            return "irrelevant", "no_task_relevant_evidence"
+        return "relevant", None
+
+    def _is_low_quality_retrieval_response(self, response: str) -> bool:
+        text = str(response or "").strip().lower()
+        markers = [
+            "the provided text",
+            "the text discusses",
+            "the text outlines",
+            "the text contains",
+            "here is some relevant information",
+            "to provide a direct answer",
+            "one would need access",
+            "not fully detailed",
+            "not a consumer dispute resolution guide",
+            "contact your bank",
+            "contact your financial institution",
+        ]
+        return any(marker in text for marker in markers)
+
+    def _extractive_evidence_summary(self, query: str, context: str) -> Optional[str]:
+        terms = self._expanded_query_terms(query)
+        if not terms:
+            return None
+        context_text = " ".join(str(context or "").split())
+        if not context_text:
+            return None
+
+        sentences = re.split(r"(?<=[.!?])\s+", context_text)
+        scored = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < 40 or "\t\t" in sentence:
+                continue
+            sentence_terms = _terms(sentence)
+            overlap = len(terms & sentence_terms)
+            if overlap <= 0:
+                continue
+            density = overlap / max(1, len(sentence_terms))
+            scored.append((overlap, density, sentence))
+        if not scored:
+            return None
+
+        selected = []
+        seen = set()
+        for _, _, sentence in sorted(scored, key=lambda item: (item[0], item[1]), reverse=True):
+            key = sentence.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(sentence)
+            if len(selected) >= 2:
+                break
+        summary = " ".join(selected)
+        return summary
+
+    def _expanded_query_terms(self, query: str) -> set:
+        terms = _terms(query)
+        expansions = {
+            "dispute": {"error", "question", "complaint", "investigate", "investigation"},
+            "disputed": {"error", "question", "complaint", "investigate", "investigation"},
+            "unauthorized": {"authority", "authorized", "fraud", "fraudulent"},
+        }
+        expanded = set(terms)
+        for term in terms:
+            expanded.update(expansions.get(term, set()))
+        return expanded
 
     def _flatten_jsonish_response(self, text: str) -> str:
         if not text or text[0] not in "[{":

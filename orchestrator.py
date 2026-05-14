@@ -1,3 +1,5 @@
+import contextvars
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Set
 
 import yaml
@@ -110,6 +112,47 @@ class ComplaintOrchestrator:
                 break
         return hops
 
+    def _run_domain_and_compliance(
+        self,
+        selected: Dict[str, Any],
+        complaint_text: str,
+        trace: TraceRecorder,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        def run_domain() -> Dict[str, Any]:
+            with trace.span("agent.domain", input_value={"kg_ids": selected["domain_kgs"]}) as span:
+                result = self.domain_agent.run(selected["domain_kgs"], complaint_text)
+                span.update(output=summarize_agent_result("domain", result))
+                return result
+
+        def run_compliance() -> Dict[str, Any]:
+            with trace.span("agent.compliance", input_value={"kg_ids": selected["compliance_kgs"]}) as span:
+                result = self.compliance_agent.run(selected["compliance_kgs"], complaint_text)
+                span.update(output=summarize_agent_result("compliance", result))
+                return result
+
+        with trace.span(
+            "agents.domain_compliance_parallel",
+            input_value={
+                "domain_kgs": selected["domain_kgs"],
+                "compliance_kgs": selected["compliance_kgs"],
+                "max_workers": 2,
+            },
+        ) as span:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                domain_context = contextvars.copy_context()
+                compliance_context = contextvars.copy_context()
+                domain_future = executor.submit(domain_context.run, run_domain)
+                compliance_future = executor.submit(compliance_context.run, run_compliance)
+                domain = domain_future.result()
+                compliance = compliance_future.result()
+            span.update(
+                output={
+                    "domain": summarize_agent_result("domain", domain),
+                    "compliance": summarize_agent_result("compliance", compliance),
+                }
+            )
+            return domain, compliance
+
     def _validate_decision_trace(self, trace: Dict[str, Any]) -> List[str]:
         errors = []
         required = [
@@ -151,13 +194,7 @@ class ComplaintOrchestrator:
                     selected = self._select_kgs(complaint_text)
                     span.update(output=summarize_kg_selection(selected))
 
-                with trace.span("agent.domain", input_value={"kg_ids": selected["domain_kgs"]}) as span:
-                    domain = self.domain_agent.run(selected["domain_kgs"], complaint_text)
-                    span.update(output=summarize_agent_result("domain", domain))
-
-                with trace.span("agent.compliance", input_value={"kg_ids": selected["compliance_kgs"]}) as span:
-                    compliance = self.compliance_agent.run(selected["compliance_kgs"], complaint_text)
-                    span.update(output=summarize_agent_result("compliance", compliance))
+                domain, compliance = self._run_domain_and_compliance(selected, complaint_text, trace)
 
                 with trace.span(
                     "agent.routing",
@@ -175,9 +212,14 @@ class ComplaintOrchestrator:
 
                 with trace.span(
                     "agent.resolution",
-                    input_value={"kg_ids": selected["domain_kgs"], "route": routing["route"]},
+                    input_value={"kg_ids": selected.get("resolution_kgs", selected["domain_kgs"]), "route": routing["route"]},
                 ) as span:
-                    resolution = self.resolution_agent.run(selected["domain_kgs"], complaint_text, route=routing["route"])
+                    resolution = self.resolution_agent.run(
+                        selected.get("resolution_kgs", selected["domain_kgs"]),
+                        complaint_text,
+                        route=routing["route"],
+                        classification=domain["classification"],
+                    )
                     span.update(output=summarize_agent_result("resolution", resolution))
 
                 confidences = [domain["confidence"], compliance["confidence"], routing["confidence"], resolution["confidence"]]
