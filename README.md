@@ -1,5 +1,8 @@
 Multi-Agent Reasoning on Bridged Knowledge Graphs for Complaint Triage
 
+[Example Trace on Langfuse](https://us.cloud.langfuse.com/project/cmp1ns33d078gad06bxtbjpju/traces/1b7132ef74c45dfb159b6c58184e0a97?observation=8080b0749e7434fc&timestamp=2026-05-12T20%3A33%3A35.985Z&traceId=1b7132ef74c45dfb159b6c58184e0a97)
+
+
 ## Setup
 
 Create a conda environment with python=3.11
