@@ -13,6 +13,7 @@ jiter==0.12.0
 joblib==1.5.2
 langfuse>=4.0.0
 llvmlite==0.45.1
+matplotlib==3.10.7
 milvus-lite==2.5.1
 numba==0.62.1
 numpy==2.3.4
